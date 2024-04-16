@@ -13,10 +13,14 @@ def map_to_array(batch):
     return batch
 
 
-ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+ds = load_dataset(
+    "hf-internal-testing/librispeech_asr_dummy", "clean", split="validation"
+)
 ds = ds.map(map_to_array)
 
 inputs = processor(ds["speech"][0], sampling_rate=16_000, return_tensors="pt")
-generated_ids = model.generate(inputs=inputs["input_values"], attention_mask=inputs["attention_mask"])
+generated_ids = model.generate(
+    inputs=inputs["input_values"], attention_mask=inputs["attention_mask"]
+)
 
 transcription = processor.batch_decode(generated_ids)

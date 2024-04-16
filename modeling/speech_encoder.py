@@ -10,15 +10,30 @@ from transformers import Wav2Vec2CTCTokenizer
 
 
 class SpeechEncoder(nn.Module):
-    def __init__(self, model_id, project_dim, downsample_K = 5, hidden_dim = 2048, train_mode="adapter"):
+    def __init__(
+        self,
+        model_id,
+        project_dim,
+        downsample_K=5,
+        hidden_dim=2048,
+        train_mode="adapter",
+    ):
         assert train_mode in ["adapter", "full"]
         super(SpeechEncoder, self).__init__()
 
-        feature_extractor = Wav2Vec2FeatureExtractor(feature_size=1, sampling_rate=16000, padding_value=0.0, do_normalize=True, return_attention_mask=False)
+        feature_extractor = Wav2Vec2FeatureExtractor(
+            feature_size=1,
+            sampling_rate=16000,
+            padding_value=0.0,
+            do_normalize=True,
+            return_attention_mask=False,
+        )
         # self.processor = AutoProcessor.from_pretrained(model_id)
         # self.processor = Wav2Vec2Processor(feature_extractor=feature_extractor, tokenizer=None)
         self.processor = AutoProcessor.from_pretrained("facebook/hubert-large-ls960-ft")
-        self.time_reduction_factor = int(self.processor.feature_extractor.sampling_rate / 50)
+        self.time_reduction_factor = int(
+            self.processor.feature_extractor.sampling_rate / 50
+        )
         # self.padding_length = self.processor.feature_extractor.pad_to_multiple_of
         self.padding_length = 320
         self.model = AutoModel.from_pretrained(model_id)
@@ -33,7 +48,7 @@ class SpeechEncoder(nn.Module):
         self.adapter = nn.Sequential(
             nn.Linear(self.model_output_dim * self.downsample_K, self.hidden_dim),
             nn.ReLU(),
-            nn.Linear(self.hidden_dim, self.project_dim)
+            nn.Linear(self.hidden_dim, self.project_dim),
         )
         self.set_gradient(train_mode)
 
@@ -51,19 +66,21 @@ class SpeechEncoder(nn.Module):
                 param.requires_grad = True
             for param in self.adapter.parameters():
                 param.requires_grad = True
-    
+
     def calculate_mask(self, input_dict):
         """
         Also need to handle the masking issue, to let the model not to attend to the padding tokens
         """
-        attention_mask = input_dict["attention_mask"] # [batch, num_samples]
-        length_in_samples = attention_mask.shape[1] // self.padding_length * self.padding_length
+        attention_mask = input_dict["attention_mask"]  # [batch, num_samples]
+        length_in_samples = (
+            attention_mask.shape[1] // self.padding_length * self.padding_length
+        )
         # calculate the mask length
         mask_length = length_in_samples // self.time_reduction_factor
         # create the mask
-        mask = attention_mask[:, ::(self.time_reduction_factor*self.downsample_K)]
+        mask = attention_mask[:, :: (self.time_reduction_factor * self.downsample_K)]
         return mask
-    
+
     def forward(self, x):
         input_dict = self.processor(x, return_tensors="pt", padding=True)
         mask = self.calculate_mask(input_dict)
@@ -71,6 +88,5 @@ class SpeechEncoder(nn.Module):
         # reshape the output from [batch_size, num_frames, hidden_size] to [batch_size, num_frames//downsample_K, hidden_size*downsample_K]
         x = x.unfold(1, self.downsample_K, self.downsample_K).flatten(2)
         x = self.adapter(x)
-        mask = mask[:, :x.shape[1]]
+        mask = mask[:, : x.shape[1]]
         return x, mask
-
