@@ -17,6 +17,7 @@ class SpeechEncoder(nn.Module):
         downsample_K=5,
         hidden_dim=2048,
         train_mode="adapter",
+        device="cuda",
     ):
         assert train_mode in ["adapter", "full"]
         super(SpeechEncoder, self).__init__()
@@ -28,15 +29,13 @@ class SpeechEncoder(nn.Module):
             do_normalize=True,
             return_attention_mask=False,
         )
-        # self.processor = AutoProcessor.from_pretrained(model_id)
-        # self.processor = Wav2Vec2Processor(feature_extractor=feature_extractor, tokenizer=None)
+        self.device = device
         self.processor = AutoProcessor.from_pretrained("facebook/hubert-large-ls960-ft")
         self.time_reduction_factor = int(
             self.processor.feature_extractor.sampling_rate / 50
         )
-        # self.padding_length = self.processor.feature_extractor.pad_to_multiple_of
         self.padding_length = 320
-        self.model = AutoModel.from_pretrained(model_id)
+        self.model = AutoModel.from_pretrained(model_id).to(self.device)
         self.model_output_dim = self.model.config.hidden_size
         self.downsample_K = downsample_K
         self.project_dim = project_dim
@@ -49,7 +48,7 @@ class SpeechEncoder(nn.Module):
             nn.Linear(self.model_output_dim * self.downsample_K, self.hidden_dim),
             nn.ReLU(),
             nn.Linear(self.hidden_dim, self.project_dim),
-        )
+        ).to(self.device)
         self.set_gradient(train_mode)
 
     def set_gradient(self, train_mode):
@@ -82,7 +81,9 @@ class SpeechEncoder(nn.Module):
         return mask
 
     def forward(self, x):
-        input_dict = self.processor(x, return_tensors="pt", padding=True)
+        input_dict = self.processor(
+            x, return_tensors="pt", padding=True, sampling_rate=16000
+        ).to(self.device)
         mask = self.calculate_mask(input_dict)
         x = self.model(**input_dict).last_hidden_state
         # reshape the output from [batch_size, num_frames, hidden_size] to [batch_size, num_frames//downsample_K, hidden_size*downsample_K]

@@ -1,34 +1,32 @@
-CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch --multi_gpu --num_processes 4 --main_process_port 1234 finetune.py \
-    --model_name_or_path TinyLlama/TinyLlama-1.1B-intermediate-step-480k-1T \
-    --output_dir ./output/503B_FT_lr1e-5_ep5_top1_2023-08-25 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch --num_processes 1 --mixed_precision fp16 finetune.py \
+    --dataset librispeech_asr \
+    --split clean \
+    --output_dir ./output/slam_asr_lr_1e-4 \
     --logging_steps 10 \
     --save_strategy epoch \
     --data_seed 42 \
-    --save_total_limit 6 \
-    --evaluation_strategy epoch \
-    --eval_dataset_size 512 \
+    --save_total_limit 3 \
+    --eval_dataset_size 10 \
     --max_eval_samples 1000 \
     --per_device_eval_batch_size 1 \
     --max_new_tokens 32 \
-    --dataloader_num_workers 3 \
-    --group_by_length=False \
+    --dataloader_num_workers 8 \
+    --group_by_length=True \
     --logging_strategy steps \
     --remove_unused_columns False \
     --do_train \
-    --do_eval \
-    --warmup_ratio 0.05 \
-    --lr_scheduler_type constant \
-    --dataset OpenAssistant/oasst_top1_2023-08-25 \
-    --dataset_format oasst1 \
+    --warmup_ratio 0.1 \
+    --lr_scheduler_type linear \
     --source_max_len 16 \
     --target_max_len 512 \
-    --per_device_train_batch_size 4 \
+    --per_device_train_batch_size 2 \
     --max_steps 0 \
-    --num_train_epochs 5 \
-    --learning_rate 1e-5 \
+    --num_train_epochs 50 \
+    --learning_rate 1e-4 \
     --adam_beta2 0.999 \
     --max_grad_norm 1.0 \
     --weight_decay 0.0 \
     --seed 0 \
     --trust_remote_code \
-    --report_to wandb 
+    --report_to tensorboard \
+    --gradient_accumulation_steps 8
