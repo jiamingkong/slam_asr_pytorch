@@ -1,0 +1,5 @@
+transformers[torch]
+datasets
+soundfile
+numpy
+torchaudio
