@@ -147,19 +147,26 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         dataset = dataset.remove_columns(
             [
                 col
-                for col in dataset.column_names["validation"]
+                for col in dataset.column_names["train"]
                 if col not in ["speech", "text"]
             ]
         )
         return dataset
-
+    if args.dataset == "librispeech_asr":
+        TRAIN_TAG = "train.100"
+    elif args.dataset == "hf-internal-testing/librispeech_asr_dummy":
+        TRAIN_TAG = "validation"
+    else:
+        TRAIN_TAG = "train"
     # Load dataset.
     dataset = load_dataset(args.dataset, args.split, trust_remote_code=True)
+    # rename TRAIN_TAG to "train"
+    dataset["train"] = dataset.pop(TRAIN_TAG)
     dataset = format_dataset(dataset)
     print(
         f"Splitting train dataset in train and validation according to `eval_dataset_size = {args.eval_dataset_size}`"
     )
-    dataset = dataset["train.100"].train_test_split(
+    dataset = dataset["train"].train_test_split(
         test_size=args.eval_dataset_size, shuffle=True, seed=42
     )
     # Split train/eval, reduce size
@@ -176,7 +183,7 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         if args.group_by_length:
             eval_dataset = eval_dataset.map(lambda x: {"length": len(x["text"])})
     if args.do_train:
-        train_dataset = dataset["train.100"]
+        train_dataset = dataset["train"]
         if (
             args.max_train_samples is not None
             and len(train_dataset) > args.max_train_samples

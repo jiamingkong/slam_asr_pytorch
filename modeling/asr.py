@@ -62,7 +62,7 @@ class SLAM_ASR(nn.Module):
         # self.prompt_template = """<|im_start|>user\n{audio}, transcribe the audio.<|im_end|>\n<|im_start|>assistant\n"""
         self.prompt_part1 = """<|im_start|>user\n"""
         self.prompt_part2 = (
-            """, transcribe the audio<|im_end|>\n<|im_start|>assistant\n"""
+            """, transcribe the audio to text<|im_end|>\n<|im_start|>assistant\n"""
         )
         self.embed_bank = {"embed1": None, "embed2": None, "att1": None, "att2": None}
         self.set_embed_bank()
