@@ -8,7 +8,6 @@ import sys
 from typing import Dict
 import numpy as np
 import logging
-
 import pandas as pd
 
 import torch
@@ -31,6 +30,7 @@ from modeling.data_collator import DataCollatorForSlamASR
 from modeling.asr import SLAM_ASR
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 from datasets import load_from_disk
+from safetensors.torch import load_file
 
 if torch.cuda.is_available():
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -57,7 +57,8 @@ def get_accelerate_model(args, checkpoint_dir):
         "TinyLlama/TinyLlama-1.1B-Chat-v0.4",
         train_mode="adapter",
     )
-    weights = torch.load(f"{checkpoint_dir}/model.safetensors")
+    # weights = torch.load(f"{checkpoint_dir}/model.safetensors")
+    weights = load_file(f"{checkpoint_dir}/model.safetensors")
     model.load_state_dict(weights)
 
     # Tokenizer
