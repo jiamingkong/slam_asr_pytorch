@@ -57,6 +57,9 @@ def get_accelerate_model(args, checkpoint_dir):
         "TinyLlama/TinyLlama-1.1B-Chat-v0.4",
         train_mode="adapter",
     )
+    weights = torch.load(f"{checkpoint_dir}/model.safetensors")
+    model.load_state_dict(weights)
+
     # Tokenizer
     tokenizer = model.language_tokenizer
 
@@ -146,7 +149,7 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
             num_proc=8,
             remove_columns=["file", "speaker_id", "chapter_id", "id", "audio"],
         )
-        
+
         print(f"dataset after mapping: {dataset}")
 
         def check_duration(sample):
