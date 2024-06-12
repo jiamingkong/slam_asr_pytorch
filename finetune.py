@@ -1,23 +1,15 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from collections import defaultdict
-import copy
 import json
 import os
 from os.path import exists, join, isdir
-from dataclasses import dataclass, field
 import sys
-from typing import Optional, Dict, Sequence
+from typing import Dict
 import numpy as np
-from tqdm import tqdm
 import logging
-import soundfile as sf
 
 import pandas as pd
-import importlib
-from packaging import version
-from packaging.version import parse
 
 import torch
 import transformers
@@ -38,7 +30,7 @@ from modeling.arguments import (
 from modeling.data_collator import DataCollatorForSlamASR
 from modeling.asr import SLAM_ASR
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
-
+from datasets import load_from_disk
 
 if torch.cuda.is_available():
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -49,6 +41,7 @@ IGNORE_INDEX = -100
 DEFAULT_PAD_TOKEN = "[PAD]"
 
 
+# 加载模型，tokenizer
 def get_accelerate_model(args, checkpoint_dir):
 
     device_map = "auto"
@@ -70,6 +63,7 @@ def get_accelerate_model(args, checkpoint_dir):
     return model, tokenizer
 
 
+# 打印模型中可训练参数的数量
 def print_trainable_parameters(args, model):
     """
     Prints the number of trainable parameters in the model.
@@ -84,6 +78,7 @@ def print_trainable_parameters(args, model):
     print(f"trainable params: {trainable_params} || " f"all params: {all_param} || ")
 
 
+# 调整分词器和嵌入的大小
 def smart_tokenizer_and_embedding_resize(
     special_tokens_dict: Dict,
     tokenizer: transformers.PreTrainedTokenizer,
@@ -115,6 +110,7 @@ def smart_tokenizer_and_embedding_resize(
     print(f"Resized tokenizer and embedding to {len(tokenizer)} tokens.")
 
 
+# 加载本地数据集
 def local_dataset(dataset_name):
     if dataset_name.endswith(".json") or dataset_name.endswith(".jsonl"):
         full_dataset = Dataset.from_json(path_or_paths=dataset_name)
@@ -129,46 +125,80 @@ def local_dataset(dataset_name):
     return split_dataset
 
 
+# 创建数据模块，包括训练集、验证集和预测集，以及数据整理器。
 def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
     """
     Make dataset and collator for supervised fine-tuning.
     Datasets are expected to have the following columns: { `input`, `output` }
     """
+    temp_dataset_file = "temp_dataset/librispeech_asr_360"
 
     def format_dataset(dataset):
         def map_to_array(batch):
-            speech, _ = sf.read(batch["file"])
-            batch["speech"] = speech
+            # Adapted to librispeech dataset
+            # speech, _ = sf.read(batch["file"])
+            batch["speech"] = batch["audio"]["array"]
             return batch
 
-        dataset = dataset.map(map_to_array)
-        print(dataset)
-        # print(dataset.column_names)
-        dataset = dataset.remove_columns(
-            [
-                col
-                for col in dataset.column_names["train"]
-                if col not in ["speech", "text"]
-            ]
+        print(f"dataset: {dataset}")
+        dataset = dataset.map(
+            map_to_array,
+            num_proc=8,
+            remove_columns=["file", "speaker_id", "chapter_id", "id", "audio"],
         )
+        
+        print(f"dataset after mapping: {dataset}")
+
+        def check_duration(sample):
+            # 音频的采样率为16kHz
+            sample_rate = 16000
+            # 计算音频的长度（秒）
+            duration = len(sample["speech"]) / sample_rate
+            # 如果音频的长度大于15秒，返回False
+            if duration > 15:
+                return False
+            # 否则，返回True
+            return True
+
+        dataset = dataset.filter(check_duration, num_proc=10)
+        dataset.save_to_disk(temp_dataset_file)
+
         return dataset
+
     if args.dataset == "librispeech_asr":
-        TRAIN_TAG = "train.100"
+        TRAIN_TAG = "train.360"
     elif args.dataset == "hf-internal-testing/librispeech_asr_dummy":
         TRAIN_TAG = "validation"
     else:
         TRAIN_TAG = "train"
     # Load dataset.
-    dataset = load_dataset(args.dataset, args.split, trust_remote_code=True)
+
+    from datasets import DatasetDict
+
+    if os.path.exists(temp_dataset_file):
+        print("load directly")
+        dataset = load_dataset(temp_dataset_file)
+    else:
+
+        dataset = load_dataset(args.dataset, args.split, trust_remote_code=True)
+        dataset = DatasetDict(
+            {
+                "train": dataset[TRAIN_TAG],
+                "validation": dataset["validation"],
+                "test": dataset["test"],
+            }
+        )
+        dataset = format_dataset(dataset)
     # rename TRAIN_TAG to "train"
-    dataset["train"] = dataset.pop(TRAIN_TAG)
-    dataset = format_dataset(dataset)
-    print(
-        f"Splitting train dataset in train and validation according to `eval_dataset_size = {args.eval_dataset_size}`"
-    )
-    dataset = dataset["train"].train_test_split(
-        test_size=args.eval_dataset_size, shuffle=True, seed=42
-    )
+    # dataset["train"] = dataset.pop(TRAIN_TAG)
+
+    # print(
+    #     f"Splitting train dataset in train and validation according to `eval_dataset_size = {args.eval_dataset_size}`"
+    # )
+    # dataset = dataset["train"].train_test_split(
+    #     test_size=args.eval_dataset_size, shuffle=True, seed=42
+    # )
+
     # Split train/eval, reduce size
     if args.do_eval or args.do_predict:
         if "validation" in dataset:
@@ -181,7 +211,14 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         ):
             eval_dataset = eval_dataset.select(range(args.max_eval_samples))
         if args.group_by_length:
-            eval_dataset = eval_dataset.map(lambda x: {"length": len(x["text"])})
+            eval_bylength = "temp_dataset/eval_bylength"
+            if os.path.exists(eval_bylength):
+                eval_dataset = load_from_disk(eval_bylength)
+            else:
+                eval_dataset = eval_dataset.map(
+                    lambda x: {"length": len(x["text"])}, num_proc=8
+                )
+                eval_dataset.save_to_disk(eval_bylength)
     if args.do_train:
         train_dataset = dataset["train"]
         if (
@@ -190,13 +227,22 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         ):
             train_dataset = train_dataset.select(range(args.max_train_samples))
         if args.group_by_length:
-            train_dataset = train_dataset.map(lambda x: {"length": len(x["text"])})
+            train_bylength = "temp_dataset/train_bylength"
+            if os.path.exists(train_bylength):
+                train_dataset = load_from_disk(train_bylength)
+            else:
+                train_dataset = train_dataset.map(
+                    lambda x: {"length": len(x["text"])}, num_proc=8
+                )
+                train_dataset.save_to_disk(train_bylength)
+
     data_collator = DataCollatorForSlamASR(
         source_max_len=args.source_max_len,
         target_max_len=args.target_max_len,
         train_on_source=args.train_on_source,
         predict_with_generate=args.predict_with_generate,
     )
+
     return dict(
         train_dataset=train_dataset if args.do_train else None,
         eval_dataset=eval_dataset if args.do_eval else None,
@@ -205,6 +251,7 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
     )
 
 
+# 获取最新的检查点。它首先检查给定的目录是否存在，然后在该目录中查找最新的检查点。
 def get_last_checkpoint(checkpoint_dir):
     if isdir(checkpoint_dir):
         is_completed = exists(join(checkpoint_dir, "completed"))
@@ -225,6 +272,8 @@ def get_last_checkpoint(checkpoint_dir):
 
 
 def train():
+
+    # 1. 解析命令行参数，这些参数定义了模型参数、数据参数、训练参数和生成参数。
     hfparser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments, GenerationArguments)
     )
@@ -243,10 +292,12 @@ def train():
     )
     print(args)
 
+    # 2. 如果在输出目录中找到了先前的训练检查点，那么就从该检查点恢复训练。
     checkpoint_dir, completed_training = get_last_checkpoint(args.output_dir)
     if completed_training:
         print("Detected that training was already completed!")
 
+    # 3. 加载模型和分词器。
     model, tokenizer = get_accelerate_model(args, checkpoint_dir)
 
     model.config.use_cache = False
@@ -255,6 +306,7 @@ def train():
 
     data_module = make_data_module(tokenizer=tokenizer, args=args)
 
+    # 4. 加载训练器
     trainer = Seq2SeqTrainer(
         model=model,
         tokenizer=tokenizer,
